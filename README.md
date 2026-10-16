@@ -16,25 +16,101 @@ Guide de référence pour déployer un laboratoire d'émulation réseau PNETLab 
 
 ## Sommaire
 
+- [Contenu du dépôt](#contenu-du-dépôt)
+- [Démarrage rapide](#démarrage-rapide)
+
+**Partie I · Conception**
+
 1. [Périmètre et architecture](#1-périmètre-et-architecture)
 2. [Prérequis et dimensionnement](#2-prérequis-et-dimensionnement)
 3. [Préparation de l'hyperviseur](#3-préparation-de-lhyperviseur)
+
+**Partie II · Installation de la plateforme**
+
 4. [Installation d'Ubuntu Server 20.04](#4-installation-dubuntu-server-2004)
 5. [Installation de PNETLab](#5-installation-de-pnetlab)
-6. [Vérifications post-installation](#6-vérifications-post-installation)
-7. [Configuration réseau](#7-configuration-réseau)
+6. [Configuration réseau](#6-configuration-réseau)
+7. [Vérifications post-installation](#7-vérifications-post-installation)
 8. [Premier accès et modes Online / Offline](#8-premier-accès-et-modes-online--offline)
 9. [Durcissement](#9-durcissement)
-10. [Gestion des images : arborescence et ishare2](#10-gestion-des-images--arborescence-et-ishare2)
+
+**Partie III · Images Cisco et Fortinet**
+
+10. [Gestion des images avec ishare2](#10-gestion-des-images-avec-ishare2)
 11. [Déploiement des images Cisco](#11-déploiement-des-images-cisco)
 12. [Déploiement de FortiGate-VM](#12-déploiement-de-fortigate-vm)
+
+**Partie IV · Validation et exploitation**
+
 13. [Lab de validation de bout en bout](#13-lab-de-validation-de-bout-en-bout)
 14. [Exploitation : sauvegarde, mise à jour, journaux](#14-exploitation--sauvegarde-mise-à-jour-journaux)
 15. [Dépannage](#15-dépannage)
+
+**Annexes**
+
 16. [Annexes](#16-annexes)
 17. [Notes légales](#17-notes-légales)
 
 ---
+
+## Contenu du dépôt
+
+```
+pnetlab-reference/
+├── README.md                        ce document
+└── scripts/
+    └── install_pnetlab_v6.sh        installation de PNETLab v6 (Ubuntu 20.04)
+```
+
+> **Avertissement.** Ce guide décrit des outils tiers (paquets PNETLab hébergés sur labhub, images communautaires via ishare2). À utiliser dans un laboratoire isolé, avec les droits d'usage nécessaires sur les images (voir §17).
+
+---
+
+## Démarrage rapide
+
+Vue d'ensemble de la procédure complète. Chaque étape renvoie à la section qui la détaille.
+
+| # | Étape | Section |
+|---|---|---|
+| 1 | Préparer la VM : 4+ vCPU, 16 Go de RAM, virtualisation imbriquée, nom d'hôte `pnetlab` | §2, §3, §4 |
+| 2 | Installer PNETLab avec le script | §5 |
+| 3 | Configurer le réseau (`pnet0`, neutraliser netplan), **puis** redémarrer | §6 |
+| 4 | Vérifier noyau, KVM, services, accès web | §7 |
+| 5 | Changer les mots de passe par défaut, choisir le mode Online / Offline | §8 |
+| 6 | Durcir (SSH, pare-feu, segmentation) | §9 |
+| 7 | Installer ishare2 et tester la connectivité | §10.1 |
+| 8 | Rechercher et télécharger les images Cisco et FortiGate | §10.2, §11, §12 |
+| 9 | Corriger les permissions | §10.5 |
+| 10 | Valider avec le lab de bout en bout | §13 |
+
+```bash
+# Étape 2
+sudo -i && chmod +x install_pnetlab_v6.sh && ./install_pnetlab_v6.sh
+
+# Étape 3 : après édition de /etc/network/interfaces (§6)
+mkdir -p /root/netplan-backup && mv /etc/netplan/*.yaml /root/netplan-backup/
+reboot
+
+# Étape 4
+uname -r && ls -l /dev/kvm && systemctl is-active apache2 mysql
+
+# Étapes 7 à 9
+apt install -y git
+git clone https://github.com/ishare2-org/ishare2-cli.git
+mkdir -p /opt/ishare2/cli && cp -r ishare2-cli/* /opt/ishare2/cli/
+cp /opt/ishare2/cli/ishare2 /usr/sbin/ishare2 && chmod +x /usr/sbin/ishare2
+ishare2 test
+ishare2 search bin | grep -i l3
+ishare2 search forti
+ishare2 pull bin <n°> && ishare2 pull qemu <n°>
+/opt/unetlab/wrappers/unl_wrapper -a fixpermissions
+```
+
+---
+
+## Partie I · Conception
+
+Choix d'architecture, dimensionnement et préparation de l'hyperviseur.
 
 ## 1. Périmètre et architecture
 
@@ -125,6 +201,10 @@ Configuration recommandée de la VM :
 
 ---
 
+## Partie II · Installation de la plateforme
+
+De l'OS invité à une plateforme PNETLab opérationnelle et durcie.
+
 ## 4. Installation d'Ubuntu Server 20.04
 
 ### 4.1 Installation
@@ -203,37 +283,17 @@ RESIZE_ROOT_LV=1 ./install_pnetlab_v6.sh      # étend le LV racine
 ENABLE_ROOT_SSH=1 ./install_pnetlab_v6.sh     # déconseillé, voir §9
 ```
 
-À la fin, **ne redémarrez pas encore** : configurez d'abord le réseau (§7), car le noyau PNETLab et la pile réseau `ifupdown` s'activent au redémarrage.
+À la fin, **ne redémarrez pas encore** : configurez d'abord le réseau (§6), car le noyau PNETLab et la pile réseau `ifupdown` s'activent au redémarrage.
 
 ---
 
-## 6. Vérifications post-installation
+## 6. Configuration réseau
 
-Après la configuration réseau du §7 et un redémarrage :
-
-```bash
-uname -r                                   # attendu : 5.17.15-pnetlab-uksm-2
-lsmod | grep kvm                           # kvm_intel ou kvm_amd chargé
-ls -l /dev/kvm                             # le périphérique doit exister
-dpkg -l | grep -i pnetlab                  # paquets pnetlab* à l'état ii
-systemctl is-active apache2 mysql          # active / active
-docker ps 2>&1 | head -3                   # le démon Docker répond
-ip -br a                                   # pnet0 porte l'adresse de gestion
-```
-
-Si `/dev/kvm` est absent, la virtualisation imbriquée n'est pas exposée (§3) ; les nœuds QEMU ne démarreront pas ou seront inutilisables.
-
-Test d'accès web : depuis un poste du réseau d'administration, ouvrir `http://<IP_pnet0>`.
-
----
-
-## 7. Configuration réseau
-
-### 7.1 Principe
+### 6.1 Principe
 
 PNETLab gère son réseau avec `ifupdown` (`/etc/network/interfaces`), pas avec netplan. Le bridge `pnet0` porte l'adresse IP ; `eth0` n'a pas d'IP et sert de port au bridge.
 
-### 7.2 Neutraliser netplan
+### 6.2 Neutraliser netplan
 
 Ubuntu 20.04 installe une configuration netplan qui entre en conflit. **Travaillez depuis la console de l'hyperviseur, pas en SSH** : vous allez couper la connectivité.
 
@@ -242,7 +302,7 @@ mkdir -p /root/netplan-backup
 mv /etc/netplan/*.yaml /root/netplan-backup/
 ```
 
-### 7.3 Fichier `/etc/network/interfaces`
+### 6.3 Fichier `/etc/network/interfaces`
 
 IP statique (recommandé pour un serveur de labs) :
 
@@ -285,7 +345,7 @@ Appliquer :
 reboot
 ```
 
-### 7.4 Contrôle
+### 6.4 Contrôle
 
 ```bash
 ip -br a
@@ -301,15 +361,35 @@ cat /etc/resolv.conf
 | Ni l'un ni l'autre ne répond | Passerelle, VLAN ou configuration du port de l'hyperviseur |
 | Passerelle injoignable | `bridge_ports` erroné ou carte absente |
 
-### 7.5 Connexion des nœuds au réseau externe
+### 6.5 Connexion des nœuds au réseau externe
 
 - Un nœud relié à `Cloud0` partage le segment de `eth0`. Il doit donc être adressé dans le LAN d'administration (ou dans un VLAN dédié si le port de l'hyperviseur est en trunk).
 - Pour isoler les labs du LAN d'administration, utilisez une seconde carte (`eth1` / `pnet1` / Cloud1) sur un réseau dédié aux labs.
 - Si votre version propose un type de réseau NAT, il fournit un accès Internet aux nœuds sans exposer le LAN ; vérifiez sa disponibilité dans le menu d'ajout de réseau.
 
-### 7.6 Cas particulier : machine physique en Wi-Fi
+### 6.6 Cas particulier : machine physique en Wi-Fi
 
 Le Wi-Fi ne peut pas être ponté simplement vers `pnet0`. Dans ce montage, `wlan0` (configuré par netplan) porte l'accès Internet et l'adresse de l'interface web, et les nœuds reliés à `Cloud0` n'ont pas d'accès extérieur sans câble sur `eth0` ou sans NAT. Protégez le fichier netplan (`chmod 600`) car il contient le mot de passe Wi-Fi, et ne le partagez jamais en clair. Cette configuration ne convient pas à un usage de référence ; privilégiez une VM filaire.
+
+---
+
+## 7. Vérifications post-installation
+
+Après la configuration réseau du §6 et un redémarrage :
+
+```bash
+uname -r                                   # attendu : 5.17.15-pnetlab-uksm-2
+lsmod | grep kvm                           # kvm_intel ou kvm_amd chargé
+ls -l /dev/kvm                             # le périphérique doit exister
+dpkg -l | grep -i pnetlab                  # paquets pnetlab* à l'état ii
+systemctl is-active apache2 mysql          # active / active
+docker ps 2>&1 | head -3                   # le démon Docker répond
+ip -br a                                   # pnet0 porte l'adresse de gestion
+```
+
+Si `/dev/kvm` est absent, la virtualisation imbriquée n'est pas exposée (§3) ; les nœuds QEMU ne démarreront pas ou seront inutilisables.
+
+Test d'accès web : depuis un poste du réseau d'administration, ouvrir `http://<IP_pnet0>`.
 
 ---
 
@@ -381,28 +461,15 @@ ufw enable
 
 ---
 
-## 10. Gestion des images : arborescence et ishare2
+## Partie III · Images Cisco et Fortinet
 
-### 10.1 Arborescence
+Téléchargement avec ishare2 et déploiement par famille d'équipements.
 
-| Type de nœud | Répertoire |
-|---|---|
-| IOL (binaires Cisco x86) | `/opt/unetlab/addons/iol/bin/` |
-| Dynamips (IOS 7200, etc.) | `/opt/unetlab/addons/dynamips/` |
-| QEMU (vIOS, CSR, FortiGate, ASAv...) | `/opt/unetlab/addons/qemu/<préfixe>-<nom>/` |
-| Docker | Géré par `docker` (images locales) |
+## 10. Gestion des images avec ishare2
 
-### 10.2 Règle impérative : corriger les permissions
+Cette partie décrit l'outil de téléchargement (ishare2), puis l'emplacement des images et la règle de permissions qui s'applique à toutes les méthodes d'import.
 
-Après **chaque** ajout d'image, quelle que soit la méthode :
-
-```bash
-/opt/unetlab/wrappers/unl_wrapper -a fixpermissions
-```
-
-Sans cela, l'image n'est pas reconnue ou le nœud s'éteint immédiatement.
-
-### 10.3 Installation d'ishare2
+### 10.1 Installation d'ishare2
 
 `ishare2` est un outil en ligne de commande pour rechercher et récupérer des images communautaires. Utilisez le dépôt `ishare2-org/ishare2-cli` (l'ancien dépôt `pnetlabrepo/ishare2` n'est plus maintenu).
 
@@ -419,7 +486,7 @@ which ishare2
 
 Le projet propose aussi une installation en une ligne (`curl ... | sh`). Comme pour tout script distant, lisez-le avant exécution.
 
-### 10.4 Commandes
+### 10.2 Commandes
 
 | Commande | Fonction |
 |---|---|
@@ -431,6 +498,12 @@ Le projet propose aussi une installation en une ligne (`curl ... | sh`). Comme p
 | `ishare2 pull bin <n°>` | Télécharge l'image IOL portant ce numéro |
 | `ishare2 pull qemu <n°>` | Télécharge une image QEMU |
 | `ishare2 pull dynamips <n°>` | Télécharge une image Dynamips |
+| `ishare2 pull <type> <n°> --overwrite` | Réécrit une image déjà présente (image corrompue, remplacement) |
+| `ishare2 pull bin all` / `pull dynamips all` | Télécharge toutes les images du type (volumineux ; déconseillé pour `qemu`) |
+| `ishare2 search <nom>` | Recherche par nom, tous types confondus : `vios`, `csr`, `forti`, `nxos`, `palo`... |
+| `ishare2 search <type> <nom>` | Recherche ciblée, par exemple `ishare2 search qemu forti` |
+| `ishare2 installed qemu` / `installed dynamips` | Liste les images installées par type |
+| `ishare2 pull docker <n°>` | Télécharge une image Docker (si proposée par votre version) |
 | `ishare2 installed bin` | Liste les images IOL installées |
 | `ishare2 upgrade` | Met à jour ishare2 |
 
@@ -446,7 +519,53 @@ Remarques :
 - `ishare2 upgrade` peut proposer des mises à jour de PNETLab. N'acceptez pas sur une installation faite par script sans avoir pris un snapshot.
 - L'interface web d'ishare2 (`ishare2 gui install`) est signalée comme instable par ses auteurs ; elle s'exécute en root.
 - En mode Offline de PNETLab, ishare2 reste dépendant d'Internet. Téléchargez en amont ou transférez par SCP/WinSCP, puis exécutez `fixpermissions`.
-- En cas d'erreur `Failed to download the JSON index file`, le problème est presque toujours DNS ou pare-feu : reprenez le §7.4.
+- En cas d'erreur `Failed to download the JSON index file`, le problème est presque toujours DNS ou pare-feu : reprenez le §6.4.
+
+### 10.3 Workflow standard (méthode de référence de ce document)
+
+Pour tout type d'image, la séquence est identique. `ishare2` crée le bon répertoire, avec le bon préfixe et le bon nom de disque, ce qui évite les erreurs de nommage du dépôt manuel.
+
+```bash
+ishare2 test                          # 1. connectivité aux dépôts
+ishare2 search <nom ou type>          # 2. identifier le numéro de l'image
+ishare2 pull <type> <n°>              # 3. télécharger (type : bin, qemu, dynamips)
+ishare2 installed <type>              # 4. vérifier la présence
+/opt/unetlab/wrappers/unl_wrapper -a fixpermissions   # 5. permissions
+```
+
+Exemple de sortie d'un téléchargement QEMU (chemin créé automatiquement) :
+
+```
+[i] Download path: /opt/unetlab/addons/qemu/<préfixe>-<nom>
+[+] Downloading file from ... /virtioa.qcow2
+[+] Download completed for Image: <préfixe>-<nom>, Type: QEMU, ID: <n°>
+```
+
+Points d'attention :
+
+1. **Espace disque.** Les images QEMU pèsent de quelques centaines de Mo à plusieurs Go. Contrôlez `df -h /opt` avant de télécharger.
+2. **Provenance.** Les images ishare2 sont hébergées par la communauté, pas par les éditeurs. Notez l'ID, le nom et la taille de chaque image téléchargée, et isolez le serveur de labs des réseaux de production.
+3. **Droits d'usage.** Le téléchargement d'une image ne vaut pas licence : voir §17.
+4. **Sans Internet.** Téléchargez depuis une machine connectée, puis transférez par SCP vers les mêmes chemins (§10.4) et lancez `fixpermissions`. L'import manuel de chaque famille est décrit aux §11 et §12 comme solution de repli.
+
+### 10.4 Arborescence
+
+| Type de nœud | Répertoire |
+|---|---|
+| IOL (binaires Cisco x86) | `/opt/unetlab/addons/iol/bin/` |
+| Dynamips (IOS 7200, etc.) | `/opt/unetlab/addons/dynamips/` |
+| QEMU (vIOS, CSR, FortiGate, ASAv...) | `/opt/unetlab/addons/qemu/<préfixe>-<nom>/` |
+| Docker | Géré par `docker` (images locales) |
+
+### 10.5 Règle impérative : corriger les permissions
+
+Après **chaque** ajout d'image, quelle que soit la méthode :
+
+```bash
+/opt/unetlab/wrappers/unl_wrapper -a fixpermissions
+```
+
+Sans cela, l'image n'est pas reconnue ou le nœud s'éteint immédiatement.
 
 ---
 
@@ -465,7 +584,17 @@ apt install -y libc6:i386 zlib1g:i386
 ldd /opt/unetlab/addons/iol/bin/<IMAGE>.bin       # aucune ligne "not found"
 ```
 
-**Dépôt de l'image** :
+**Téléchargement avec ishare2 (méthode de référence)** :
+
+```bash
+ishare2 search bin | grep -i l3          # routeurs
+ishare2 search bin | grep -i l2          # commutateurs
+ishare2 pull bin <n°>                    # exemple : un L3 et un L2
+ishare2 installed bin
+/opt/unetlab/wrappers/unl_wrapper -a fixpermissions
+```
+
+**Repli : dépôt manuel** (serveur sans Internet) :
 
 ```bash
 cp <IMAGE>.bin /opt/unetlab/addons/iol/bin/
@@ -498,9 +627,13 @@ Ne mélangez pas les deux : un template L3 avec une image L2 (ou inversement) pr
 Pour les routeurs 7200 et plateformes anciennes :
 
 ```bash
-cp c7200-adventerprisek9-mz.<version>.image /opt/unetlab/addons/dynamips/
+ishare2 search dynamips
+ishare2 pull dynamips <n°>
+ishare2 installed dynamips
 /opt/unetlab/wrappers/unl_wrapper -a fixpermissions
 ```
+
+Repli manuel : `cp c7200-adventerprisek9-mz.<version>.image /opt/unetlab/addons/dynamips/`, puis `fixpermissions`.
 
 L'IOS doit être au format décompressé accepté par Dynamips. Utilisez le template « Dynamips » (c7200 ou autre) et, si l'interface le demande, ajustez l'idle-PC pour limiter la charge CPU.
 
@@ -515,7 +648,21 @@ Convention : un répertoire par version, dont le préfixe détermine le template
 | CSR1000v | `csr1000vng-universalk9.<version>` | `virtioa.qcow2` |
 | ASAv | `asav-<version>` | `hda.qcow2` |
 
-Procédure générique :
+**Téléchargement avec ishare2 (méthode de référence)** :
+
+```bash
+ishare2 search vios                      # vIOS et vIOS-L2
+ishare2 search csr                       # CSR1000v
+ishare2 search asav                      # ASAv
+ishare2 search nxos                      # Nexus
+ishare2 pull qemu <n°>
+ishare2 installed qemu
+/opt/unetlab/wrappers/unl_wrapper -a fixpermissions
+```
+
+ishare2 crée le répertoire `/opt/unetlab/addons/qemu/<préfixe>-<nom>/` et y place le disque sous le nom attendu par le template. Il n'y a rien à renommer.
+
+**Repli : import manuel.** Procédure générique :
 
 ```bash
 mkdir -p /opt/unetlab/addons/qemu/vios-adventerprisek9-m.SPA.159-3.M6
@@ -537,17 +684,32 @@ Contrôlez le nom de disque et les paramètres exacts de chaque template dans l'
 
 ## 12. Déploiement de FortiGate-VM
 
-### 12.1 Obtention de l'image
+### 12.1 Obtention de l'image avec ishare2 (méthode de référence)
+
+```bash
+ishare2 search forti                     # liste toutes les images Fortinet
+ishare2 search qemu forti                # variante ciblée sur le type qemu
+ishare2 pull qemu <n°>                   # n° lu dans la colonne ID
+ishare2 installed qemu | grep -i forti
+/opt/unetlab/wrappers/unl_wrapper -a fixpermissions
+```
+
+Choisissez la version selon votre besoin (par exemple une branche 7.0 / 7.2 pour reproduire un parc existant). Les images FortiGate se téléchargent par ishare2 comme n'importe quelle image QEMU : le répertoire `fortinet-FGT-<version>` et le disque `virtioa.qcow2` sont créés automatiquement. Contrôlez le résultat :
+
+```bash
+ls -l /opt/unetlab/addons/qemu/ | grep -i fortinet
+ls -l /opt/unetlab/addons/qemu/fortinet-FGT-*/virtioa.qcow2
+```
+
+Comme pour les autres images ishare2, la source est communautaire. Pour un usage proche de la production (validation de configuration avant déploiement, tests de sécurité), préférez le firmware officiel (§12.2) et comparez sa version avec celle de l'image ishare2.
+
+### 12.2 Alternative : image officielle Fortinet (import manuel)
 
 1. Créer un compte sur le portail support Fortinet (FortiCloud).
-2. Télécharger le firmware **FortiGate-VM pour KVM** (archive nommée du type `FGT_VM64_KVM-v<version>-build<xxxx>-FORTINET.out.kvm.zip`).
+2. Télécharger le firmware **FortiGate-VM pour KVM** (archive du type `FGT_VM64_KVM-v<version>-build<xxxx>-FORTINET.out.kvm.zip`).
 3. Extraire l'archive : elle contient `fortios.qcow2`.
 
-L'image doit provenir du portail officiel. Ne téléchargez pas de firmware Fortinet depuis des sources tierces : un firmware réseau compromis est un risque majeur de sécurité.
-
-### 12.2 Dépôt dans PNETLab
-
-Le préfixe `fortinet-` active le template Fortinet ; le disque doit s'appeler `virtioa.qcow2`.
+Le préfixe de répertoire `fortinet-` active le template Fortinet ; le disque doit s'appeler `virtioa.qcow2`.
 
 ```bash
 VER="v7.2.8-build1639"      # adapter à la version téléchargée
@@ -624,6 +786,10 @@ La politique d'évaluation de Fortinet évolue selon les versions de FortiOS (du
 - FortiManager et FortiAnalyzer suivent la même procédure, avec des images et des ressources beaucoup plus volumineuses (plusieurs vCPU, 8 Go et plus).
 
 ---
+
+## Partie IV · Validation et exploitation
+
+Test de bout en bout, sauvegarde, maintenance et dépannage.
 
 ## 13. Lab de validation de bout en bout
 
@@ -723,7 +889,7 @@ journalctl -u apache2 --since "1 hour ago"
 | `bad interpreter` | Fins de ligne Windows | `dos2unix install_pnetlab_v6.sh` |
 | Attente prolongée du verrou dpkg | `unattended-upgrades` actif | Laisser terminer ou `systemctl stop unattended-upgrades` |
 | Virtualisation matérielle absente | Imbrication non exposée | Reprendre le §3 |
-| Pas d'accès web | Réseau mal configuré | §7.4, puis `systemctl status apache2` |
+| Pas d'accès web | Réseau mal configuré | §6.4, puis `systemctl status apache2` |
 | Nœuds QEMU qui ne démarrent pas | `/dev/kvm` absent | §3 |
 | Image invisible ou nœud qui s'éteint immédiatement | Permissions | `fixpermissions` |
 | IOL : `not found` avec `ldd` | Bibliothèques 32 bits | §11.1 |
@@ -732,8 +898,8 @@ journalctl -u apache2 --since "1 hour ago"
 | `unable to open NETMAP` | Message normal en lancement manuel | Aucune action |
 | FortiGate bloqué au démarrage | RAM ou version incompatible | Console série, augmenter la RAM, consulter les notes de version |
 | FortiGate : disque non trouvé | Mauvais nom de fichier | Le disque doit s'appeler `virtioa.qcow2` |
-| Nœud sans accès externe | Cloud non relié à une interface active, promiscuité refusée | §3 et §7.5 |
-| `Failed to download the JSON index file` | DNS ou pare-feu | §7.4 |
+| Nœud sans accès externe | Cloud non relié à une interface active, promiscuité refusée | §3 et §6.5 |
+| `Failed to download the JSON index file` | DNS ou pare-feu | §6.4 |
 
 Test manuel d'une image IOL pour lire l'erreur réelle :
 
@@ -793,5 +959,6 @@ mode default offline
 ## 17. Notes légales
 
 - Les images Cisco (IOL, IOS, vIOS, CSR, ASAv) et Fortinet (FortiOS) sont la propriété de leurs éditeurs. Il vous appartient de disposer des licences nécessaires. Ce document ne décrit pas de méthode pour contourner ou générer des licences.
+- ishare2 facilite le téléchargement d'images hébergées par la communauté ; il ne fournit aucune licence. Certaines images (Cisco, Fortinet, Palo Alto...) restent soumises aux conditions de leur éditeur, et leur usage hors évaluation ou laboratoire autorisé relève de votre responsabilité.
 - Les alternatives officielles : Cisco Modeling Labs (CML) pour Cisco, et les licences d'évaluation ou de laboratoire de Fortinet.
 - Les paquets d'installation de PNETLab proviennent de sources tierces : vérifiez leur provenance avant tout usage hors laboratoire.
